@@ -1,0 +1,154 @@
+name: Push Continuous Integration
+
+on:
+  push:
+    branches:
+      - master
+      - 3.4.x
+      - 3.3.x
+      - 3.2.x
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        scala: [2.13.6, 2.12.13]
+        verilator: ["4.204"]
+        z3: ["4.8.10"]
+        espresso: ["2.4"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      # Setup Scala
+      - name: Setup Scala
+        uses: olafurpg/setup-scala@v10
+        with:
+          java-version: adopt@1.8
+      - name: Cache Scala
+        uses: coursier/cache-action@v5
+
+      # Documentation
+      - name: Documentation (Scala 2.12 only)
+        if: matrix.scala == '2.12.13'
+        run: sbt ++${{ matrix.scala }} docs/mdoc
+
+      - name: Install Verilator/Z3 Build Dependencies
+        run: sudo apt-get install -y git make autoconf g++ flex bison libfl2 libfl-dev
+
+      - name: Cache Z3 ${{ matrix.z3 }}
+        uses: actions/cache@v2
+        id: cache-z3
+        with:
+          path: z3-z3-${{ matrix.z3 }}/build
+          key: ${{ runner.os }}-z3-${{ matrix.z3 }}
+      - name: Compile Z3
+        if: steps.cache-z3.outputs.cache-hit != 'true'
+        run: |
+          wget https://github.com/Z3Prover/z3/archive/refs/tags/z3-${{ matrix.z3 }}.tar.gz
+          tar xvf z3-${{ matrix.z3 }}.tar.gz
+          cd z3-z3-${{ matrix.z3 }}
+          mkdir -p build
+          cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DZ3_LINK_TIME_OPTIMIZATION=1 \
+            -DZ3_BUILD_PYTHON_BINDINGS=1 \
+            -DPYTHON_EXECUTABLE=/usr/bin/python
+          make
+      - name: Install Z3 ${{ matrix.z3 }}
+        run: |
+          cd z3-z3-${{ matrix.z3 }}/build
+          sudo make install
+          z3 --version
+
+      - name: Cache Verilator ${{ matrix.verilator }}
+        uses: actions/cache@v2
+        id: cache-verilator
+        with:
+          path: verilator-${{ matrix.verilator }}
+          key: ${{ runner.os }}-verilator-${{ matrix.verilator }}
+      - name: Compile Verilator ${{ matrix.verilator }}
+        if: steps.cache-verilator.outputs.cache-hit != 'true'
+        run: |
+          wget https://github.com/verilator/verilator/archive/refs/tags/v${{ matrix.verilator }}.tar.gz
+          tar xvf v${{ matrix.verilator }}.tar.gz
+          cd verilator-${{ matrix.verilator }}
+          autoconf
+          ./configure
+          make
+      - name: Install Verilator ${{ matrix.verilator }}
+        run: |
+          cd verilator-${{ matrix.verilator }}
+          sudo make install
+          verilator --version
+
+      - name: Cache Espresso ${{ matrix.espresso }}
+        uses: actions/cache@v2
+        id: cache-espresso
+        with:
+          path: espresso-${{ matrix.espresso }}
+          key: ${{ runner.os }}-espresso-${{ matrix.espresso }}
+      - name: Compile Espresso ${{ matrix.espresso }}
+        if: steps.cache-espresso.outputs.cache-hit != 'true'
+        run: |
+          wget https://github.com/chipsalliance/espresso/archive/refs/tags/v${{ matrix.espresso }}.tar.gz
+          tar xvf v${{ matrix.espresso }}.tar.gz
+          cd espresso-${{ matrix.espresso }}
+          mkdir -p build
+          cd build
+          cmake ..
+          make
+      - name: Install Espresso ${{ matrix.espresso }}
+        run: |
+          cd espresso-${{ matrix.espresso }}/build
+          sudo make install
+
+      - name: Test
+        run: sbt ++${{ matrix.scala }} test noPluginTests/test
+
+      - name: Binary compatibility
+        run: sbt ++${{ matrix.scala }} mimaReportBinaryIssues
+
+  # Sentinel job to simplify how we specify which checks need to pass in branch
+  # protection and in Mergify
+  #
+  # When adding new jobs, please add them to `needs` below
+  all_tests_passed:
+    name: "all tests passed"
+    needs: [ci]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo Success!
+
+  # sbt ci-release publishes all cross versions so this job needs to be
+  # separate from a Scala versions build matrix to avoid duplicate publishing
+  publish:
+    needs: [all_tests_passed]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Scala
+        uses: olafurpg/setup-scala@v10
+        with:
+          java-version: adopt@1.8
+      - name: Cache Scala
+        uses: coursier/cache-action@v5
+      - name: Setup GPG (for Publish)
+        uses: olafurpg/setup-gpg@v3
+      - name: Publish
+        run: sbt ci-release
+        env:
+          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
+          PGP_SECRET: ${{ secrets.PGP_SECRET }}
+          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+
+
