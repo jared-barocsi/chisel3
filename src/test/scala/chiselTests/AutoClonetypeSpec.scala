@@ -298,7 +298,7 @@ class AutoClonetypeSpec extends ChiselFlatSpec with Utils {
         out := in
       }}
     }
-
+    
     it should "support Bundles with non-val implicit parameters" in {
       class MyBundle(implicit i: Int) extends Bundle {
         val foo = UInt(i.W)
@@ -348,5 +348,26 @@ class AutoClonetypeSpec extends ChiselFlatSpec with Utils {
       elaborate(new MyModule(UInt(8.W)))
     }
 
+    it should "support Bundles with higher-kinded types" in {
+      class DataGen[T <: Data](gen: T) {
+        def newType: T = gen.cloneType
+      }
+
+      class FooBundle[A <: Data, B <: DataGen[A]](gen: B) extends Bundle {
+        val foo = gen.newType
+
+        override def cloneType = new FooBundle[A, B](gen).asInstanceOf[this.type]
+      }
+
+      class Example extends MultiIOModule {
+        val gen = new DataGen(UInt(8.W))
+        val in  = IO(Input(new FooBundle[UInt, DataGen[UInt]](gen)))
+        val out = IO(Output(new FooBundle[UInt, DataGen[UInt]](gen)))
+
+        out := in
+      }
+
+      elaborate(new Example)
+    }
   }
 }

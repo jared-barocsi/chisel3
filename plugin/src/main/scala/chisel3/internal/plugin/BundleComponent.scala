@@ -108,8 +108,19 @@ private[plugin] class BundleComponent(val global: Global, arguments: ChiselPlugi
             if (isData(vp.symbol)) cloneTypeFull(select) else select
           })
 
-        val ttpe = Ident(bundle.symbol)
-        val neww = localTyper.typed(New(ttpe, conArgs))
+        val identifier = Ident(bundle.symbol)
+
+        val applyType = bundle.tparams match {
+          case types: List[TypeDef] if types.nonEmpty &&
+            // remove this check to run on *all* kinded types -- type parameter checking is broken on all of them
+            bundle.name.toString == "FooBundle"
+            =>
+            AppliedTypeTree(identifier, types.map(typeDef => Ident(typeDef.name)))
+          case _ =>
+            identifier
+        }
+        println(New(applyType, conArgs))
+        val neww = localTyper.typedHigherKindedType(New(applyType, conArgs), localTyper.context.defaultModeForTyped)
 
         // Create the symbol for the method and have it be associated with the Bundle class
         val cloneTypeSym =  bundle.symbol.newMethod(TermName("_cloneTypeImpl"), bundle.symbol.pos.focus, Flag.OVERRIDE | Flag.PROTECTED)
